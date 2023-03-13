@@ -26,7 +26,7 @@ class DataAnalysis:
             logging.exception(f"Imput data of {type(self).__name__} is empty.")
             sys.exit()
 
-        self._data = np.array(data, dtype=np.float64)
+        self._data = np.array(data, dtype=np.float32)
         self._len = len(data)
         self._name = str(name)
 
@@ -51,9 +51,11 @@ class DataAnalysis:
         self, max_distance=500, scalex=True, scaley=True, data=None, **kwargs
     ):
         data_gpu = gpuarray.to_gpu(self._data)
-        autocorrelations = gpuarray.zeros(max_distance + 1, dtype=np.float64)
-        total = gpuarray.empty(1, dtype=np.float64)
-        kernels = SourceModule("""
+        autocorrelations = gpuarray.zeros(max_distance + 1, dtype=np.float32)
+        total = gpuarray.zeros(1, dtype=np.float32)
+        total_gpu = gpuarray.to_gpu(total)
+        kernels = SourceModule(
+        """
             __global__ void summ_final(float *x, float *total){
                 __shared__ float psum[1024];
                 int index = threadIdx.x;
@@ -64,25 +66,25 @@ class DataAnalysis:
 
                 inext = blockDim.x / 2;
 
-                while (inext >= 0){
-                    if (index <= inext){
+                while (inext >= 1){
+                    if (index < inext){
                         psum[index] = psum[index] + psum[index + inext];
                     }
                     inext = inext / 2;
-                    __sycthreads();
+                    __syncthreads();
                 }
 
-                if (index == 1){
+                if (index == 0){
                     total[0] = psum[0];
                 }
             }
-         """)
+        """)
         summ_final = kernels.get_function("summ_final")
-        summ_final(data_gpu, total, block=(1024, 1, 1))
-        print(total)
+        summ_final(data_gpu.gpudata, total_gpu.gpudata, block=(1024, 1, 1))
+        print(total_gpu[0])
 
 
 if __name__ == "__main__":
-    numbers = np.ones((1024, ), dtype=np.float64)
+    numbers = np.ones(1024, dtype=np.float32)
     data = DataAnalysis(numbers, "numbers")
     data.plot_autocorrelation()
