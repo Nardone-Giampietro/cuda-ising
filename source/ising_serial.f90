@@ -10,8 +10,8 @@ program Ising_Monte_Carlo_Serial
     character(len=2) :: name
 
     seed = -145
-    N_term = 50000
-    N_misures = 1000000
+    N_term = 1
+    N_misures = 2**20
     N_size = 100
     N_decorr = 1
     Beta = 0.3
