@@ -14,7 +14,7 @@ program Ising_Monte_Carlo_Serial
     N_misures = 2**20
     N_size = 100
     N_decorr = 1
-    Beta = 0.3
+    Beta = 0.416
     B = 0.0
     Start = 0
 
@@ -32,7 +32,7 @@ program Ising_Monte_Carlo_Serial
             write(name, 3) i_count
             3 format(i2)
         end if
-        open(unit=i_count, action='write', file='Energy_L10_B03_'//trim(name)//'.txt')
+        open(unit=i_count, action='write', file='Magn_L10_B03_'//trim(name)//'.txt')
 
         call init_field(N_size, Field, Start)
 
@@ -44,8 +44,8 @@ program Ising_Monte_Carlo_Serial
             do i_decor = 1, N_decorr
                 call update_metro(N_size, Beta, Field, B)
             end do 
-            eng = Energy(N_size, Field, B)
-            write(i_count, 1) eng
+            mgn = Magn(N_size, Field)
+            write(i_count, 1) mgn
             1 format(f21.18)
         end do
         close(i_count)

@@ -49,7 +49,7 @@ class DataAnalysis:
         )
         plt.show()
 
-    def __summ_reduction(self, array, dms, offset=0, product=False):
+    def __summ_reduction(self, array, dim, offset=0, product=False):
         BlockDim = 256
         GridDim = 1024
         BlockGridDim = int(self._dim / (BlockDim * GridDim))
@@ -59,7 +59,7 @@ class DataAnalysis:
         summ_partial = kernels.get_function("summ_partial")
         summ_product_partial = kernels.get_function("summ_product_partial")
 
-        dim = np.int32(dms)
+        dim = np.int32(dim)
         offset = np.int32(offset)
 
         data_gpu = gpuarray.to_gpu(array)
@@ -89,19 +89,21 @@ class DataAnalysis:
 
         return sum_total[0]
 
-    def plot_autocorrelation(self, max_distance=100, scalex=True, scaley=True, data=None, **kwargs):
+    def plot_autocorrelation(self, max_distance=3000, scalex=True, scaley=True, data=None, **kwargs):
         autocorrelations = gpuarray.zeros(max_distance + 1, dtype=np.float32)
 
         for offset in np.arange(max_distance + 1):
             sample_dimension = np.float32(self._dim - offset)
             product_sum = self.__summ_reduction(self._data, self._dim, offset=offset, product=True).get()
-            simple_sum = self.__summ_reduction(self._data, self._dim, offset=0, product=False).get()
+            simple_sum = self.__summ_reduction(self._data, self._dim, product=False).get()
             offset_sum = self.__summ_reduction(self._data, self._dim, offset=offset, product=False).get()
-            autocorrelations[offset] = (product_sum / sample_dimension)- simple_sum * offset_sum / (sample_dimension**2)
-            print(autocorrelations.get()[offset] / autocorrelations.get()[0])
-
+            autocorrelations[offset] = (product_sum / sample_dimension) - simple_sum * offset_sum / (sample_dimension**2)
+        
+        times = np.arange(max_distance + 1, dtype=np.int32)
+        plt.plot(times, autocorrelations.get() / autocorrelations.get()[0], "-r")
+        plt.show()
 
 if __name__ == "__main__":
-    numbers = np.loadtxt("Energy_L10_B03_01.txt", dtype=np.float32)
-    data = DataAnalysis(numbers, "numbers")
+    Data= np.loadtxt("Magn_L10_B03_01.txt", dtype=np.float32)
+    data = DataAnalysis(Data, "numbers")
     data.plot_autocorrelation()
