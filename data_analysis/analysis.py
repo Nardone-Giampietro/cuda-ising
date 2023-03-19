@@ -12,7 +12,7 @@ class DataAnalysis:
     kernels_cu = open("kernels.cu", "r")
     kernels_cu = kernels_cu.read()
 
-    def __init__(self, data, name):
+    def __init__(self, data, name=None, max_distance=0):
         try:
             iterator = iter(data)
         except TypeError:
@@ -32,6 +32,10 @@ class DataAnalysis:
         self._dim = len(data)
         self._name = str(name)
 
+        if max_distance != 0:
+            self._max_distance = max_distance
+            self._autocorrelations = self.__autocorrelations(max_distance)
+
     @property
     def data(self):
         return self._data
@@ -40,14 +44,17 @@ class DataAnalysis:
     def name(self):
         return self._name
 
-    def plot(self, scalex=True, scaley=True, data=None, **kwargs):
-        plt.xlabel("Time t")
-        plt.ylabel(self._name)
-        times = np.arange(self._dim, dtype=np.int32)
-        plt.plot(
-            times, self._data, "ro", scalex=scalex, scaley=scaley, data=data, **kwargs
-        )
-        plt.show()
+    def __iter__(self):
+        return iter(self._data)
+
+    def __len__(self):
+        return self._dim
+
+    def __getitem__(self, key):
+        return self._data[key]
+
+    def __str__(self):
+        return str(self._data)
 
     def __summ_reduction(self, array, dim, offset=0, product=False):
         BlockDim = 256
@@ -89,21 +96,48 @@ class DataAnalysis:
 
         return sum_total[0]
 
-    def plot_autocorrelation(self, max_distance=3000, scalex=True, scaley=True, data=None, **kwargs):
-        autocorrelations = gpuarray.zeros(max_distance + 1, dtype=np.float32)
+    def __autocorrelations(self, max_distance):
+        autocorrelations_gpu = gpuarray.zeros(max_distance + 1, dtype=np.float32)
 
         for offset in np.arange(max_distance + 1):
             sample_dimension = np.float32(self._dim - offset)
-            product_sum = self.__summ_reduction(self._data, self._dim, offset=offset, product=True).get()
-            simple_sum = self.__summ_reduction(self._data, self._dim, product=False).get()
-            offset_sum = self.__summ_reduction(self._data, self._dim, offset=offset, product=False).get()
-            autocorrelations[offset] = (product_sum / sample_dimension) - simple_sum * offset_sum / (sample_dimension**2)
-        
-        times = np.arange(max_distance + 1, dtype=np.int32)
-        plt.plot(times, autocorrelations.get() / autocorrelations.get()[0], "-r")
+            product_sum = self.__summ_reduction(
+                self._data, self._dim, offset=offset, product=True
+            ).get()
+            simple_sum = self.__summ_reduction(
+                self._data, self._dim, product=False
+            ).get()
+            offset_sum = self.__summ_reduction(
+                self._data, self._dim, offset=offset, product=False
+            ).get()
+            autocorrelations_gpu[offset] = (
+                product_sum / sample_dimension
+            ) - simple_sum * offset_sum / (sample_dimension**2)
+
+        autocorrelations = autocorrelations_gpu.get()
+
+        return autocorrelations
+
+    def plot(self, scalex=True, scaley=True, data=None, **kwargs):
+        plt.xlabel("Time t")
+        plt.ylabel(self._name)
+        times = np.arange(self._dim, dtype=np.int32)
+        plt.plot(
+            times, self._data, "ro", scalex=scalex, scaley=scaley, data=data, **kwargs
+        )
         plt.show()
 
+    def plot_autocorrelation(self, scalex=True, scaley=True, data=None, **kwargs):
+        autocorr = self._autocorrelations
+
+        plt.xlabel("Time t")
+        plt.ylabel(f"{self._name} autocorrelation")
+        times = np.arange(self._max_distance + 1, dtype=np.int32)
+        plt.plot(times, autocorr / autocorr[0], "-r")
+        plt.show()
+
+
 if __name__ == "__main__":
-    Data= np.loadtxt("Magn_L10_B03_01.txt", dtype=np.float32)
-    data = DataAnalysis(Data, "numbers")
+    Data = np.loadtxt("Magn_L10_B03_01.txt", dtype=np.float32)
+    data = DataAnalysis(Data, name="Magnetization", max_distance=3000)
     data.plot_autocorrelation()
