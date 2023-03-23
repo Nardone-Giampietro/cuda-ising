@@ -57,7 +57,7 @@ class DataAnalysis:
         return str(self._data)
 
     def __summ_reduction(self, array, dim, offset=0, product=False):
-        BlockDim = 256
+        BlockDim = 512
         GridDim = 1024
         BlockGridDim = int(self._dim / (BlockDim * GridDim))
 
@@ -94,7 +94,35 @@ class DataAnalysis:
 
         summ_final(partial.gpudata, sum_total.gpudata, block=(GridDim, 1, 1))
 
-        return sum_total[0]
+        return sum_total.get()[0]
+
+    def simpleMean(self):
+        simpleMean = self.__summ_reduction(
+            self._data, self._dim, offset=0, product=False
+        )
+        simpleMean = simpleMean / float(self._dim)
+        return simpleMean
+
+    def squareMean(self):
+        squareMean = self.__summ_reduction(
+            self._data, self._dim, offset=0, product=True
+        )
+        squareMean = squareMean / float(self._dim)
+        return squareMean
+
+    def naiveVariance(self):
+        naiveVariance = self.squareMean() - self.simpleMean() ** 2
+        return naiveVariance
+
+    def unbiasedVariance(self):
+        unbiasedVariance = self.naiveVariance() * (self._dim / (self._dim - 1))
+        return unbiasedVariance
+
+    def sampleMeanVariance(self):
+        sampleMeanVariance = (self.unbiasedVariance() / self._dim) * (
+            1 + 2.0 * self.intAutocorrelationTime()
+        )
+        return np.sqrt(sampleMeanVariance)
 
     def __autocorrelations(self, max_distance):
         autocorrelations_gpu = gpuarray.zeros(max_distance + 1, dtype=np.float32)
@@ -103,13 +131,13 @@ class DataAnalysis:
             sample_dimension = np.float32(self._dim - offset)
             product_sum = self.__summ_reduction(
                 self._data, self._dim, offset=offset, product=True
-            ).get()
+            )
             simple_sum = self.__summ_reduction(
                 self._data, self._dim, product=False
-            ).get()
+            )
             offset_sum = self.__summ_reduction(
                 self._data, self._dim, offset=offset, product=False
-            ).get()
+            )
             autocorrelations_gpu[offset] = (
                 product_sum / sample_dimension
             ) - simple_sum * offset_sum / (sample_dimension**2)
@@ -117,6 +145,13 @@ class DataAnalysis:
         autocorrelations = autocorrelations_gpu.get()
 
         return autocorrelations
+
+    def intAutocorrelationTime(self):
+        tau_int = 0.0
+        for auto in self._autocorrelations[1::]:
+            tau_int = tau_int + auto
+        tau_int = tau_int / self._autocorrelations[0]
+        return int(tau_int)
 
     def plot(self, scalex=True, scaley=True, data=None, **kwargs):
         plt.xlabel("Time t")
@@ -127,7 +162,7 @@ class DataAnalysis:
         )
         plt.show()
 
-    def plot_autocorrelation(self, scalex=True, scaley=True, data=None, **kwargs):
+    def plotAutocorrelation(self, scalex=True, scaley=True, data=None, **kwargs):
         autocorr = self._autocorrelations
 
         plt.xlabel("Time t")
@@ -138,6 +173,6 @@ class DataAnalysis:
 
 
 if __name__ == "__main__":
-    Data = np.loadtxt("Magn_L10_B03_01.txt", dtype=np.float32)
+    Data = np.loadtxt("01_magn_L10_B0-3.txt", dtype=np.float32)
     data = DataAnalysis(Data, name="Magnetization", max_distance=3000)
-    data.plot_autocorrelation()
+    print(f"Mean: {data.simpleMean():.3f} Variance: {data.sampleMeanVariance():.3f}")

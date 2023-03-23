@@ -27,7 +27,7 @@ extern "C"
 extern "C"
 {
     __global__ void summ_partial(float *x, float *partial, int dim, int offset){
-        __shared__ float psum[256];
+        __shared__ float psum[512];
         int index, inext;
         float thread_summ;
 
