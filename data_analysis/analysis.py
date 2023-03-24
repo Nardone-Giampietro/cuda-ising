@@ -43,6 +43,22 @@ class DataAnalysis:
     @property
     def name(self):
         return self._name
+    
+    @property
+    def mean(self):
+        return self.__simpleMean(self._data)
+    
+    @property
+    def squareMean(self):
+        return self.__squareMean(self._data)
+    
+    @property
+    def unbiasedVariance(self):
+        return np.sqrt(self.__unbiasedVariance(self._data))
+    
+    @property
+    def sampleVariance(self):
+        return np.sqrt(self.__sampleVariance(self._data))
 
     def __iter__(self):
         return iter(self._data)
@@ -96,33 +112,75 @@ class DataAnalysis:
 
         return sum_total.get()[0]
 
-    def simpleMean(self):
+    def __simpleMean(self, array):
         simpleMean = self.__summ_reduction(
-            self._data, self._dim, offset=0, product=False
+            array, len(array), offset=0, product=False
         )
-        simpleMean = simpleMean / float(self._dim)
+        simpleMean = simpleMean / float(len(array))
         return simpleMean
 
-    def squareMean(self):
+    def __squareMean(self, array):
         squareMean = self.__summ_reduction(
-            self._data, self._dim, offset=0, product=True
+            array, len(array), offset=0, product=True
         )
-        squareMean = squareMean / float(self._dim)
+        squareMean = squareMean / float(len(array))
         return squareMean
 
-    def naiveVariance(self):
-        naiveVariance = self.squareMean() - self.simpleMean() ** 2
-        return naiveVariance
+    def __sampleVariance(self, array):
+        sampleVariance = self.__squareMean(array) - self.__simpleMean(array) ** 2
+        return sampleVariance
 
-    def unbiasedVariance(self):
-        unbiasedVariance = self.naiveVariance() * (self._dim / (self._dim - 1))
+    def __unbiasedVariance(self, array):
+        unbiasedVariance = self.__sampleVariance(array) * (len(array) / (len(array) - 1))
         return unbiasedVariance
 
     def sampleMeanVariance(self):
-        sampleMeanVariance = (self.unbiasedVariance() / self._dim) * (
+        sampleMeanVariance = ((self.__unbiasedVariance(self._data)) / self._dim) * (
             1 + 2.0 * self.intAutocorrelationTime()
         )
         return np.sqrt(sampleMeanVariance)
+    
+    def __dataBlocking(self, array, steps=1):
+        try:
+            if (2**steps >= len(array)):
+                raise ValueError
+        except ValueError:
+            logging.exception(
+                "Data Blocking iterations exceeded the dimension of the data"
+            )
+            sys.exit()
+
+        BlockDim = 1024
+
+        kernels = SourceModule(self.kernels_cu)
+        array_reduction = kernels.get_function("array_reduction")
+
+        dataBlockingVariances = np.empty(steps, dtype=np.float32)
+
+        array_gpu = gpuarray.to_gpu(array)
+        dim = np.int32(len(array))
+        next_array_gpu = gpuarray.empty(int(dim / 2), dtype=np.float32)
+
+        for step in np.arange(steps):
+            if (len(array_gpu)< BlockDim):
+                BlockGridDim = 1
+            else:
+                BlockGridDim = int(len(array_gpu)/ BlockDim)
+            
+            array_reduction(
+                array_gpu.gpudata,
+                dim,
+                next_array_gpu.gpudata,
+                block=(BlockDim, 1, 1),
+                grid=(BlockGridDim, 1, 1)
+            )
+            dim = np.int32(dim / 2)
+            array = next_array_gpu.get()
+            dataBlockingVariances[step] = np.sqrt(self.__unbiasedVariance(array) / float(dim))
+            array_gpu = next_array_gpu
+            next_array_gpu = gpuarray.empty(dim, dtype=np.float32)
+
+        return dataBlockingVariances
 
     def __autocorrelations(self, max_distance):
         autocorrelations_gpu = gpuarray.zeros(max_distance + 1, dtype=np.float32)
@@ -171,8 +229,19 @@ class DataAnalysis:
         plt.plot(times, autocorr / autocorr[0], "-r")
         plt.show()
 
+    def plotDataBlocking(self, steps=1, scalex=True, scaley=True, data=None, **kwargs):
+        dataBlockingVariances = self.__dataBlocking(self._data, steps=steps)
+
+        plt.xlabel("Iteration")
+        plt.ylabel("Variances")
+        iterations = np.arange(steps, dtype=np.int32)
+        plt.yscale("log")
+        plt.plot(iterations, dataBlockingVariances, "ro")
+        plt.show()
+
 
 if __name__ == "__main__":
-    Data = np.loadtxt("01_magn_L10_B0-3.txt", dtype=np.float32)
-    data = DataAnalysis(Data, name="Magnetization", max_distance=3000)
-    print(f"Mean: {data.simpleMean():.3f} Variance: {data.sampleMeanVariance():.3f}")
+    Data = np.loadtxt("Magn_L10_B0-416_01.txt", dtype=np.float32)
+    data = DataAnalysis(Data[:1048576], name="Magnetization", max_distance=0)
+
+    data.plotDataBlocking(steps=18)
