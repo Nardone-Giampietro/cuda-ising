@@ -1,7 +1,7 @@
 extern "C"
 {
-    __global__ void summ_final(float *x, float *total){
-        __shared__ float psum[1024];
+    __global__ void summ_final(double *x, double *total){
+        __shared__ double psum[1024];
         int index = threadIdx.x;
         int inext;
 
@@ -26,10 +26,10 @@ extern "C"
 
 extern "C"
 {
-    __global__ void summ_partial(float *x, float *partial, int dim, int offset){
-        __shared__ float psum[512];
+    __global__ void summ_partial(double *x, double *partial, int dim, int offset){
+        __shared__ double psum[512];
         int index, inext;
-        float thread_summ;
+        double thread_summ;
 
         index = blockIdx.x * blockDim.x + threadIdx.x;
         thread_summ = 0.0;
@@ -58,10 +58,10 @@ extern "C"
 
 extern "C"
 {
-    __global__ void summ_product_partial(float *x, float *partial, int dim, int offset){
-        __shared__ float psum[256];
+    __global__ void summ_product_partial(double *x, double *partial, int dim, int offset){
+        __shared__ double psum[512];
         int index, inext;
-        float thread_sum;
+        double thread_sum;
 
         index = blockIdx.x * blockDim.x + threadIdx.x;
         thread_sum = 0.0;
@@ -85,6 +85,34 @@ extern "C"
 
         if (index == 0){
             partial[blockIdx.x] = psum[0];
+        }
+    }
+}
+
+extern "C"
+{
+    __global__ void array_reduction(double *in_array, int dim, double *out_array){
+        int index = blockDim.x * blockIdx.x + threadIdx.x;
+        int out_index;
+
+        if (index < dim - 1){
+            if ((index == 0) || (index % 2 == 0)){
+                out_index = (int) index / 2;
+                out_array[out_index] = (in_array[index] + in_array[index + 1]) / ((double) 2.0);
+            }
+        }
+    }
+}
+
+extern "C"
+{
+    __global__ void resample(double *array_in, int dim, int *numbers, double *array_out){
+        int index = blockDim.x * blockIdx.x + threadIdx.x;
+        int new_index;
+        
+        if (index < dim){
+            new_index = numbers[index];
+            array_out[index] = array_in[new_index];
         }
     }
 }

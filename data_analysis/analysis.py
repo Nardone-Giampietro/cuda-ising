@@ -4,6 +4,7 @@ import numpy as np
 from pycuda.compiler import SourceModule
 from pycuda import autoinit
 from pycuda import gpuarray
+from pycuda import curandom
 from pycuda.reduction import ReductionKernel
 import matplotlib.pyplot as plt
 
@@ -28,9 +29,11 @@ class DataAnalysis:
             logging.exception(f"Imput data of {type(self).__name__} is empty.")
             sys.exit()
 
-        self._data = np.array(data, dtype=np.float32)
+        self._data = np.array(data, dtype=np.float64)
         self._dim = len(data)
         self._name = str(name)
+
+        self._rng = curandom.XORWOWRandomNumberGenerator(curandom.seed_getter_uniform)
 
         if max_distance != 0:
             self._max_distance = max_distance
@@ -53,8 +56,8 @@ class DataAnalysis:
         return self.__squareMean(self._data)
     
     @property
-    def unbiasedVariance(self):
-        return np.sqrt(self.__unbiasedVariance(self._data))
+    def unbiasedNaiveMeanVariance(self):
+        return np.sqrt(self.__unbiasedNaiveMeanVariance(self._data))
     
     @property
     def sampleVariance(self):
@@ -75,70 +78,97 @@ class DataAnalysis:
     def __summ_reduction(self, array, dim, offset=0, product=False):
         BlockDim = 512
         GridDim = 1024
-        BlockGridDim = int(self._dim / (BlockDim * GridDim))
 
-        kernels = SourceModule(self.kernels_cu)
-        summ_final = kernels.get_function("summ_final")
-        summ_partial = kernels.get_function("summ_partial")
-        summ_product_partial = kernels.get_function("summ_product_partial")
-
-        dim = np.int32(dim)
-        offset = np.int32(offset)
-
-        data_gpu = gpuarray.to_gpu(array)
-        sum_total = gpuarray.zeros(1, dtype=np.float32)
-        partial = gpuarray.empty(GridDim, dtype=np.float32)
-
-        if not product:
-            summ_partial(
-                data_gpu.gpudata,
-                partial.gpudata,
-                dim,
-                offset,
-                block=(BlockDim, 1, 1),
-                grid=(GridDim, BlockGridDim),
-            )
+        if (dim <= BlockDim * GridDim):
+            summ = np.float64(0)
+            for i in np.arange(dim - offset):
+                if product:
+                    summ = summ + array[i] * array[i + offset]
+                else:
+                    summ = summ + array[i + offset]
+            return summ
         else:
-            summ_product_partial(
-                data_gpu.gpudata,
-                partial.gpudata,
-                dim,
-                offset,
-                block=(BlockDim, 1, 1),
-                grid=(GridDim, BlockGridDim),
-            )
+            BlockGridDim = int(dim / (BlockDim * GridDim))
+            kernels = SourceModule(self.kernels_cu)
+            summ_final = kernels.get_function("summ_final")
+            summ_partial = kernels.get_function("summ_partial")
+            summ_product_partial = kernels.get_function("summ_product_partial")
 
-        summ_final(partial.gpudata, sum_total.gpudata, block=(GridDim, 1, 1))
+            dim = np.int32(dim)
+            offset = np.int32(offset)
 
-        return sum_total.get()[0]
+            data_gpu = gpuarray.to_gpu(array)
+            sum_total = gpuarray.zeros(1, dtype=np.float64)
+            partial = gpuarray.empty(GridDim, dtype=np.float64)
+
+            if not product:
+                summ_partial(
+                    data_gpu.gpudata,
+                    partial.gpudata,
+                    dim,
+                    offset,
+                    block=(BlockDim, 1, 1),
+                    grid=(GridDim, BlockGridDim),
+                )
+            else:
+                summ_product_partial(
+                    data_gpu.gpudata,
+                    partial.gpudata,
+                    dim,
+                    offset,
+                    block=(BlockDim, 1, 1),
+                    grid=(GridDim, BlockGridDim),
+                )
+
+            summ_final(partial.gpudata, sum_total.gpudata, block=(GridDim, 1, 1))
+
+            return sum_total.get()[0]
 
     def __simpleMean(self, array):
         simpleMean = self.__summ_reduction(
             array, len(array), offset=0, product=False
         )
-        simpleMean = simpleMean / float(len(array))
+        simpleMean = simpleMean / np.float64(len(array))
         return simpleMean
+
 
     def __squareMean(self, array):
         squareMean = self.__summ_reduction(
             array, len(array), offset=0, product=True
         )
-        squareMean = squareMean / float(len(array))
+        squareMean = squareMean / np.float64(len(array))
         return squareMean
 
     def __sampleVariance(self, array):
-        sampleVariance = self.__squareMean(array) - self.__simpleMean(array) ** 2
+        sampleVariance = self.__squareMean(array) - self.__simpleMean(array)**2
         return sampleVariance
 
-    def __unbiasedVariance(self, array):
-        unbiasedVariance = self.__sampleVariance(array) * (len(array) / (len(array) - 1))
-        return unbiasedVariance
+    def __unbiasedNaiveMeanVariance(self, array):
+        unbiasedNaiveMeanVariance = self.__sampleVariance(array) / np.float64(len(array) - 1)
+        return unbiasedNaiveMeanVariance
+    
+    def __resample(self, array):
+        dim = len(array)
+        BlockDim = 1024
+        BlockGridDim = int(dim / BlockDim)
 
-    def sampleMeanVariance(self):
-        sampleMeanVariance = ((self.__unbiasedVariance(self._data)) / self._dim) * (
-            1 + 2.0 * self.intAutocorrelationTime()
+        kernels = SourceModule(self.kernels_cu)
+        resample = kernels.get_function("resample")
+        array_gpu = gpuarray.to_gpu(array)
+        array_out_gpu = gpuarray.empty(dim, dtype=np.float64)
+        numbers_gpu = self._rng.gen_uniform(dim, dtype=np.float32) * (dim - 1)
+        numbers_gpu = numbers_gpu.astype(np.int32) 
+
+        resample(
+            array_gpu.gpudata,
+            np.int32(dim),
+            numbers_gpu.gpudata,
+            array_out_gpu.gpudata,
+            block=(BlockDim, 1, 1),
+            grid=(BlockGridDim, 1, 1)
         )
-        return np.sqrt(sampleMeanVariance)
+
+        return array_out_gpu.get()
     
     def __dataBlocking(self, array, steps=1):
         try:
@@ -155,38 +185,38 @@ class DataAnalysis:
         kernels = SourceModule(self.kernels_cu)
         array_reduction = kernels.get_function("array_reduction")
 
-        dataBlockingVariances = np.empty(steps, dtype=np.float32)
+        dataBlockingVariances = np.empty(steps, dtype=np.float64)
 
         array_gpu = gpuarray.to_gpu(array)
-        dim = np.int32(len(array))
-        next_array_gpu = gpuarray.empty(int(dim / 2), dtype=np.float32)
+        dim = len(array)
+        next_array_gpu = gpuarray.empty(int(dim / 2), dtype=np.float64)
 
         for step in np.arange(steps):
-            if (len(array_gpu)< BlockDim):
+            if (len(array_gpu) <= BlockDim):
                 BlockGridDim = 1
             else:
-                BlockGridDim = int(len(array_gpu)/ BlockDim)
+                BlockGridDim = int(len(array_gpu) / BlockDim)
             
             array_reduction(
                 array_gpu.gpudata,
-                dim,
+                np.int32(dim),
                 next_array_gpu.gpudata,
                 block=(BlockDim, 1, 1),
                 grid=(BlockGridDim, 1, 1)
             )
-            dim = np.int32(dim / 2)
+            dim = int(dim / 2)
             array = next_array_gpu.get()
-            dataBlockingVariances[step] = np.sqrt(self.__unbiasedVariance(array) / float(dim))
             array_gpu = next_array_gpu
-            next_array_gpu = gpuarray.empty(dim, dtype=np.float32)
+            next_array_gpu = gpuarray.empty(int(dim / 2), dtype=np.float64)
+            dataBlockingVariances[step] = np.sqrt(self.__unbiasedNaiveMeanVariance(array))
 
         return dataBlockingVariances
 
     def __autocorrelations(self, max_distance):
-        autocorrelations_gpu = gpuarray.zeros(max_distance + 1, dtype=np.float32)
+        autocorrelations_gpu = gpuarray.zeros(max_distance + 1, dtype=np.float64)
 
         for offset in np.arange(max_distance + 1):
-            sample_dimension = np.float32(self._dim - offset)
+            sample_dimension = np.float64(self._dim - offset)
             product_sum = self.__summ_reduction(
                 self._data, self._dim, offset=offset, product=True
             )
@@ -203,9 +233,38 @@ class DataAnalysis:
         autocorrelations = autocorrelations_gpu.get()
 
         return autocorrelations
+    
+    def __varianceBootstrap(self, resamplings=1):
+        variances = np.empty(resamplings, dtype=np.float64)
+
+        for step in np.arange(resamplings):
+            resampled_array = self.__resample(self._data)
+            variances[step] = self.__sampleVariance(resampled_array)
+        
+        return variances
+    
+    def sampleMeanVariance(self):
+        sampleMeanVariance = (self.__unbiasedNaiveMeanVariance(self._data)) * (
+            1.0 + 2.0 * self.intAutocorrelationTime()
+        )
+        return np.sqrt(sampleMeanVariance)
+    
+    def plotVarianceBootstrap(self, max_resamplings=1):
+        variances = np.empty(max_resamplings, dtype=np.float64)
+        
+        for resamplings in np.arange(1, max_resamplings + 1):
+            variances_array = self.__varianceBootstrap(resamplings=resamplings)
+            variances[resamplings - 1] = np.sqrt(self.__sampleVariance(variances_array))
+        
+        plt.xlabel("Number of resamplings")
+        plt.ylabel("Estimate of Sus Error ")
+        resamplings = np.arange(1, max_resamplings + 1, 1, dtype=np.int32)
+        plt.plot(resamplings, variances, "r+")
+        plt.show()
+
 
     def intAutocorrelationTime(self):
-        tau_int = 0.0
+        tau_int = np.float64(0.0)
         for auto in self._autocorrelations[1::]:
             tau_int = tau_int + auto
         tau_int = tau_int / self._autocorrelations[0]
@@ -232,16 +291,18 @@ class DataAnalysis:
     def plotDataBlocking(self, steps=1, scalex=True, scaley=True, data=None, **kwargs):
         dataBlockingVariances = self.__dataBlocking(self._data, steps=steps)
 
-        plt.xlabel("Iteration")
+        plt.xlabel("Iterations")
         plt.ylabel("Variances")
-        iterations = np.arange(steps, dtype=np.int32)
-        plt.yscale("log")
-        plt.plot(iterations, dataBlockingVariances, "ro")
+        iterations = np.arange(1, steps + 1, 1, dtype=np.int32)
+        plt.xticks(iterations)
+        plt.semilogy()
+        plt.plot(iterations, dataBlockingVariances, "r+")
         plt.show()
 
 
 if __name__ == "__main__":
-    Data = np.loadtxt("Magn_L10_B0-416_01.txt", dtype=np.float32)
-    data = DataAnalysis(Data[:1048576], name="Magnetization", max_distance=0)
+    DataM = np.loadtxt("Magn_L10_B0-416_01.txt", dtype=np.float64)[:1048576]
+    Data = np.ones(1048576, dtype=np.float64)
+    data = DataAnalysis(DataM, name="Magnetization", max_distance=0)
 
-    data.plotDataBlocking(steps=18)
+    data.plotVarianceBootstrap(max_resamplings=400)
