@@ -63,6 +63,18 @@ class DataAnalysis:
     def sampleVariance(self):
         return np.sqrt(self.__sampleVariance(self._data))
 
+    @property  
+    def sampleMeanVariance(self):
+        sampleMeanVariance = (self.__unbiasedNaiveMeanVariance(self._data)) * (
+            1.0 + 2.0 * self.intAutocorrelationTime()
+        )
+        return np.sqrt(sampleMeanVariance)
+    
+    def sampleVarianceError(self, resamplings=1):
+        variances = self.__varianceBootstrap(resamplings=resamplings)
+        variance_error = np.sqrt(self.__sampleVariance(variances))
+        return variance_error
+
     def __iter__(self):
         return iter(self._data)
 
@@ -243,12 +255,6 @@ class DataAnalysis:
         
         return variances
     
-    def sampleMeanVariance(self):
-        sampleMeanVariance = (self.__unbiasedNaiveMeanVariance(self._data)) * (
-            1.0 + 2.0 * self.intAutocorrelationTime()
-        )
-        return np.sqrt(sampleMeanVariance)
-    
     def plotVarianceBootstrap(self, max_resamplings=1):
         variances = np.empty(max_resamplings, dtype=np.float64)
         
@@ -299,10 +305,3 @@ class DataAnalysis:
         plt.plot(iterations, dataBlockingVariances, "r+")
         plt.show()
 
-
-if __name__ == "__main__":
-    DataM = np.loadtxt("Magn_L10_B0-416_01.txt", dtype=np.float64)[:1048576]
-    Data = np.ones(1048576, dtype=np.float64)
-    data = DataAnalysis(DataM, name="Magnetization", max_distance=0)
-
-    data.plotVarianceBootstrap(max_resamplings=400)
