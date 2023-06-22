@@ -7,32 +7,31 @@ program Ising_Monte_Carlo_Serial
     integer, dimension(:), allocatable :: aft,bfr
     real :: Beta, B
     real(kind=dp) :: mgn, eng
-    character(len=2) :: name
+    character(len=3) :: name
 
     seed = -145
-    N_term = 1
+    N_term = 100000
     N_misures = 2**20
-    N_size = 100
+    N_size = 40
     N_decorr = 1
-    Beta = 0.416
+    Beta = 0.35
     B = 0.0
-    Start = 0
+    Start = 1
 
     allocate(Field(N_size, N_size))
     allocate(aft(N_size))
     allocate(bfr(N_size))
     call geometry(N_size)
 
-    do i_count = 1, 1
+    do i_count = 1, 100
 
-        if (i_count .lt. 10) then
-            write(name, 2) i_count
-            2 format(i2.2)
-        else
-            write(name, 3) i_count
-            3 format(i2)
-        end if
-        open(unit=i_count, action='write', file='Magn_L10_B03_'//trim(name)//'.txt')
+        write(name, 2) i_count
+        2 format(I3)
+
+        open(unit=i_count, action='write', file=trim(name)//'.txt')
+
+        write(i_count, '(A4,I3)') '# L ', N_size
+        write(i_count, '(A4,F5.3)') '# B ', Beta
 
         call init_field(N_size, Field, Start)
 
@@ -49,6 +48,9 @@ program Ising_Monte_Carlo_Serial
             1 format(f21.18)
         end do
         close(i_count)
+
+        Beta = Beta + 0.002
+
     end do
 
     deallocate(Field, aft, bfr)
@@ -120,7 +122,7 @@ program Ising_Monte_Carlo_Serial
                 Magn = Magn + real(fld(i,j), dp)
             end do
         end do
-        Magn = Magn / real(sz**2, dp)
+        Magn = abs(Magn) / real(sz**2, dp)
     end function Magn
 
     subroutine update_metro(sz, bt, fld, h)

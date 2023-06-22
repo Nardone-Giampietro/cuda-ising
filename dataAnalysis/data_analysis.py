@@ -1,3 +1,4 @@
+import os
 import logging
 import sys
 import numpy as np
@@ -13,7 +14,7 @@ class DataAnalysis:
     kernels_cu = open("kernels.cu", "r")
     kernels_cu = kernels_cu.read()
 
-    def __init__(self, data, name=None, max_distance=0):
+    def __init__(self, data, name=None):
         try:
             iterator = iter(data)
         except TypeError:
@@ -34,10 +35,6 @@ class DataAnalysis:
         self._name = str(name)
 
         self._rng = curandom.XORWOWRandomNumberGenerator(curandom.seed_getter_uniform)
-
-        if max_distance != 0:
-            self._max_distance = max_distance
-            self._autocorrelations = self.__autocorrelations(max_distance)
 
     @property
     def data(self):
@@ -62,11 +59,15 @@ class DataAnalysis:
     @property
     def sampleVariance(self):
         return np.sqrt(self.__sampleVariance(self._data))
+    
+    @property
+    def sampleVarianceSquare(self):
+        return self.__sampleVariance(self._data)
 
     @property  
-    def sampleMeanVariance(self):
+    def sampleMeanVariance(self, delta=1.0):
         sampleMeanVariance = (self.__unbiasedNaiveMeanVariance(self._data)) * (
-            1.0 + 2.0 * self.intAutocorrelationTime()
+            1.0 + 2.0 * np.abs(int(self.intAutocorrelationTime(delta=delta)))
         )
         return np.sqrt(sampleMeanVariance)
     
@@ -74,6 +75,34 @@ class DataAnalysis:
         variances = self.__varianceBootstrap(resamplings=resamplings)
         variance_error = np.sqrt(self.__sampleVariance(variances))
         return variance_error
+
+    def intAutocorrelationTime(self, delta=1.0):
+        tau_out = np.float64(0.0)
+        distance = 0
+        delta_up = 100.0
+
+        try:
+            if ((delta >= 100.0) or (delta <= 0.0)):
+                raise ValueError
+        except ValueError:
+            logging.exception(
+                f"The variable delta must be inside (0, 100)."
+            )
+            sys.exit()
+        
+        max_distance = self._dim / 2
+
+        while ((delta_up > delta) and (distance < max_distance)):
+            distance = distance + 10
+            autocorrelations = self.__autocorrelations(distance)
+            tau_in = np.float64(0.0)
+            for auto in autocorrelations[1::]:
+                tau_in = tau_in + auto
+            tau_in = tau_in / autocorrelations[0]
+            delta_up = 100.0 *  (np.abs(tau_in - tau_out) / tau_in)
+            tau_out = tau_in
+
+        return int(tau_out)
 
     def __iter__(self):
         return iter(self._data)
@@ -267,15 +296,7 @@ class DataAnalysis:
         resamplings = np.arange(1, max_resamplings + 1, 1, dtype=np.int32)
         plt.plot(resamplings, variances, "r+")
         plt.show()
-
-
-    def intAutocorrelationTime(self):
-        tau_int = np.float64(0.0)
-        for auto in self._autocorrelations[1::]:
-            tau_int = tau_int + auto
-        tau_int = tau_int / self._autocorrelations[0]
-        return int(tau_int)
-
+    
     def plot(self, scalex=True, scaley=True, data=None, **kwargs):
         plt.xlabel("Time t")
         plt.ylabel(self._name)
@@ -285,12 +306,12 @@ class DataAnalysis:
         )
         plt.show()
 
-    def plotAutocorrelation(self, scalex=True, scaley=True, data=None, **kwargs):
-        autocorr = self._autocorrelations
+    def plotAutocorrelation(self, distance=1, scalex=True, scaley=True, data=None, **kwargs):
+        autocorr = self.__autocorrelations(distance)
 
         plt.xlabel("Time t")
         plt.ylabel(f"{self._name} autocorrelation")
-        times = np.arange(self._max_distance + 1, dtype=np.int32)
+        times = np.arange(distance + 1, dtype=np.int32)
         plt.plot(times, autocorr / autocorr[0], "-r")
         plt.show()
 
@@ -305,3 +326,12 @@ class DataAnalysis:
         plt.plot(iterations, dataBlockingVariances, "r+")
         plt.show()
 
+if __name__ == "__main__":
+    current_dir = os.getcwd()
+    file = current_dir + "/41.txt"
+    data = np.loadtxt(file, dtype=np.float64, comments="#")
+    mag = DataAnalysis(data, name="Magnetization")
+    tau = mag.intAutocorrelationTime(delta=1.0)
+    print(tau)
+    mag.plotAutocorrelation(distance=400)
+    
