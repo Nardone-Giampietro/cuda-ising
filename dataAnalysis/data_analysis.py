@@ -36,6 +36,18 @@ class DataAnalysis:
 
         self._rng = curandom.XORWOWRandomNumberGenerator(curandom.seed_getter_uniform)
 
+    def __iter__(self):
+        return iter(self._data)
+
+    def __len__(self):
+        return self._dim
+
+    def __getitem__(self, key):
+        return self._data[key]
+
+    def __str__(self):
+        return str(self._data)
+
     @property
     def data(self):
         return self._data
@@ -67,9 +79,13 @@ class DataAnalysis:
     @property  
     def sampleMeanVariance(self, delta=1.0):
         sampleMeanVariance = (self.__unbiasedNaiveMeanVariance(self._data)) * (
-            1.0 + 2.0 * np.abs(int(self.intAutocorrelationTime(delta=delta)))
+            1.0 + 2.0 * np.abs(int(self.__autocorrelationTime()))
         )
         return np.sqrt(sampleMeanVariance)
+
+    @property
+    def autocorrelationTime(self):
+        return self.__autocorrelationTime()
     
     def sampleVarianceError(self, resamplings=1):
         variances = self.__varianceBootstrap(resamplings=resamplings)
@@ -103,19 +119,7 @@ class DataAnalysis:
             tau_out = tau_in
 
         return int(tau_out)
-
-    def __iter__(self):
-        return iter(self._data)
-
-    def __len__(self):
-        return self._dim
-
-    def __getitem__(self, key):
-        return self._data[key]
-
-    def __str__(self):
-        return str(self._data)
-
+                 
     def __summ_reduction(self, array, dim, offset=0, product=False):
         BlockDim = 512
         GridDim = 1024
@@ -172,6 +176,28 @@ class DataAnalysis:
         simpleMean = simpleMean / np.float64(len(array))
         return simpleMean
 
+    def __autocorrelationTime(self):
+            distance = 0
+            delta = 1.0
+            max_distance = self._dim / 2
+            autocorr_0 = self.__autocorrelation(0)
+            while True:
+                autocorrelation = self.__autocorrelation(distance) / autocorr_0
+                delta_up = np.abs(autocorrelation - np.exp(-1))
+                if (delta_up <= delta ):
+                    delta = delta_up
+                    distance = distance + 1
+                else:
+                    try:
+                        if (distance < max_distance):
+                            return distance
+                        else:
+                            raise ValueError
+                    except ValueError:
+                        logging.exception(
+                            f"The autocorrelation time is bigger than the data size."
+                        )
+                        sys.exit()
 
     def __squareMean(self, array):
         squareMean = self.__summ_reduction(
@@ -252,24 +278,30 @@ class DataAnalysis:
             dataBlockingVariances[step] = np.sqrt(self.__unbiasedNaiveMeanVariance(array))
 
         return dataBlockingVariances
+    
+    def __autocorrelation(self, distance):
+        sample_dimension = np.float64(self._dim - distance)
+        product_sum = self.__summ_reduction(
+            self._data, self._dim, offset=distance, product=True
+        )
+        simple_sum = self.__summ_reduction(
+            self._data, self._dim, product=False
+        )
+        offset_sum = self.__summ_reduction(
+            self._data, self._dim, offset=distance, product=False
+        )
+        autocorrelation = (product_sum / sample_dimension
+        ) - simple_sum * offset_sum / (sample_dimension**2)
+
+        return autocorrelation
+
 
     def __autocorrelations(self, max_distance):
         autocorrelations_gpu = gpuarray.zeros(max_distance + 1, dtype=np.float64)
 
         for offset in np.arange(max_distance + 1):
-            sample_dimension = np.float64(self._dim - offset)
-            product_sum = self.__summ_reduction(
-                self._data, self._dim, offset=offset, product=True
-            )
-            simple_sum = self.__summ_reduction(
-                self._data, self._dim, product=False
-            )
-            offset_sum = self.__summ_reduction(
-                self._data, self._dim, offset=offset, product=False
-            )
-            autocorrelations_gpu[offset] = (
-                product_sum / sample_dimension
-            ) - simple_sum * offset_sum / (sample_dimension**2)
+            autocorrelation = self.__autocorrelation(offset)
+            autocorrelations_gpu[offset] = autocorrelation
 
         autocorrelations = autocorrelations_gpu.get()
 
@@ -331,7 +363,7 @@ if __name__ == "__main__":
     file = current_dir + "/41.txt"
     data = np.loadtxt(file, dtype=np.float64, comments="#")
     mag = DataAnalysis(data, name="Magnetization")
-    tau = mag.intAutocorrelationTime(delta=1.0)
+    tau = mag.autocorrelationTime
     print(tau)
     mag.plotAutocorrelation(distance=400)
     

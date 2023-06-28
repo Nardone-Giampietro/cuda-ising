@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from matplotlib.figure import figaspect
 import data_analysis as da
 import linecache
-from natsort import natsorted 
+from natsort import natsorted
 from alive_progress import alive_bar
 
 plt.rcParams.update({
@@ -38,7 +38,7 @@ class magn_data:
     @property
     def size(self):
         return self._size
-    
+
     @property
     def name(self):
         return self._name
@@ -46,15 +46,15 @@ class magn_data:
     @property
     def beta(self):
         return self._beta_data
-    
+
     @property
     def mag(self):
         return self._mag_data
-    
+
     @property
     def mag_err(self):
         return self._mag_errors
-    
+
     @property
     def sus(self):
         return self._sus_data
@@ -82,7 +82,7 @@ class magn_data:
                         resamplings=50
                     )
                 bar()
-    
+
     def _fill_mag_data(self):
         print(f"Filling Magnetization Data for L = {self._size} ...")
         with alive_bar(self._data_size) as bar:
@@ -103,28 +103,28 @@ class magn_data:
     def save_sus(self):
         file_name = self._name
         np.savetxt(
-            file_name + "_SUS.txt", 
-            np.c_[self._beta_data, self._sus_data, self._sus_errors], 
-            delimiter=" ", 
-            newline="\n", 
+            file_name + "_SUS.txt",
+            np.c_[self._beta_data, self._sus_data, self._sus_errors],
+            delimiter=" ",
+            newline="\n",
             header="L "+str(self._size),
             comments="# "
         )
         print(f"Susceptibility Data Saved for L = {self._size}.\n")
-    
+
     def save_mag(self):
         file_name = self._name
         np.savetxt(
-            file_name + ".txt", 
-            np.c_[self._beta_data, self._mag_data, self._mag_errors], 
-            delimiter=" ", 
-            newline="\n", 
+            file_name + ".txt",
+            np.c_[self._beta_data, self._mag_data, self._mag_errors],
+            delimiter=" ",
+            newline="\n",
             header="L "+str(self._size),
             comments="# "
         )
         print(f"Magnetization Data Saved for L = {self._size}.\n")
-    
-    def save_aut(self, delta=0.5):
+
+    def save_aut(self):
         filename = self._name
         tau_int_array = np.empty(self._data_size, dtype=np.float64)
         print(f"Computing Autocorrelation Data for L = {self._size} ...")
@@ -138,14 +138,14 @@ class magn_data:
                     first, remainder = beta_line.split(" B ")
                     beta = np.float64(remainder.split()[0])
                     self._beta_data[count] = beta
-                    tau_int_array[count] = data.intAutocorrelationTime(delta=delta)
+                    tau_int_array[count] = data.autocorrelationTime
                 bar()
-        
+
         np.savetxt(
-            filename + "_AUT.txt", 
-            np.c_[self._beta_data, tau_int_array], 
-            delimiter=" ", 
-            newline="\n", 
+            filename + "_AUT.txt",
+            np.c_[self._beta_data, tau_int_array],
+            delimiter=" ",
+            newline="\n",
             header="L "+str(self._size),
             comments="# "
         )
@@ -164,9 +164,9 @@ def plot_mg(*args):
         first, remainder = size_line.split(" L ")
         size = remainder.split()[0]
         x, y, yerr = np.loadtxt(data, dtype=np.float64, comments="#", unpack=True)
-        ax.errorbar(x, y, yerr, 
-                    fmt=color_map[count] + "o", 
-                    elinewidth=1, 
+        ax.errorbar(x, y, yerr,
+                    fmt=color_map[count] + "o",
+                    elinewidth=1,
                     capsize=5,
                     markersize= 4,
                     label= r"L = "+size+"",
@@ -193,9 +193,9 @@ def plot_sus(*args):
         first, remainder = size_line.split(" L ")
         size = remainder.split()[0]
         x, y, yerr = np.loadtxt(data, dtype=np.float64, comments="#", unpack=True)
-        ax.errorbar(x, y, yerr, 
-                    fmt=color_map[count] + "o", 
-                    elinewidth=1, 
+        ax.errorbar(x, y, yerr,
+                    fmt=color_map[count] + "o",
+                    elinewidth=1,
                     capsize=5,
                     markersize= 4,
                     label= r"L = "+size+"",
@@ -217,7 +217,7 @@ def plot_aut(*args):
         first, remainder = size_line.split(" L ")
         size = remainder.split()[0]
         x, y= np.loadtxt(data, dtype=np.float64, comments="#", unpack=True)
-        plt.plot(x, y, 
+        plt.plot(x, y,
                     color_map[count] + "-",
                     markersize= 4,
                     label= r"L = "+size+"",
@@ -229,30 +229,37 @@ def plot_aut(*args):
 
 if __name__ == "__main__":
     current_dir = os.getcwd()
-    
+
     dir8 = current_dir + "/MG_L8/"
     dir20 = current_dir + "/MG_L20/"
     dir30 = current_dir + "/MG_L30/"
     dir40 = current_dir + "/MG_L40/"
 
-    # mg8 = magn_data(dir8, 8, name="MG_L8", mag=True)
-    # mg8.save_mag()
-    #mg8.save_aut(delta=1.0)
+    #mg8 = magn_data(dir8, 8, name="MG_L8", mag=True)
+    #mg8.save_mag()
+    #mg8.save_aut()
 
-    # mg20 = magn_data(dir20, 20, name="MG_L20", mag=True)
-    # mg20.save_mag()
-    #mg20.save_aut(delta=1.0)
+    #mg20 = magn_data(dir20, 20, name="MG_L20", mag=True)
+    #mg20.save_mag()
+    #mg20.save_aut()
 
-    # mg30 = magn_data(dir30, 30, name="MG_L30", mag=True)
-    # mg30.save_mag()
-    #mg30.save_aut(delta=1.0)
+    #mg30 = magn_data(dir30, 30, name="MG_L30", mag=True)
+    #mg30.save_mag()
+    #mg30.save_aut()
 
-    mg40 = magn_data(dir40, 40, name="MG_L40", mag=True)
-    mg40.save_mag()
-    #mg40.save_aut(delta=0.5)
+    #mg40 = magn_data(dir40, 40, name="MG_L40", mag=True)
+    #mg40.save_mag()
+    #mg40.save_aut()
 
-    plot_mg(current_dir + "/MG_L8.txt",
-             current_dir + "/MG_L20.txt",
-             current_dir + "/MG_L30.txt",
-             current_dir + "/MG_L40.txt"
+    # plot_mg(current_dir + "/MG_L8.txt",
+    #          current_dir + "/MG_L20.txt",
+    #          current_dir + "/MG_L30.txt",
+    #          current_dir + "/MG_L40.txt"
+    #         )
+
+    plot_aut(current_dir + "/MG_L8_AUT.txt",
+             current_dir + "/MG_L20_AUT.txt",
+             current_dir + "/MG_L30_AUT.txt",
+             current_dir + "/MG_L40_AUT.txt"
             )
+
