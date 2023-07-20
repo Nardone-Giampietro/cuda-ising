@@ -1,0 +1,8 @@
+MODULE precision_m
+	IMPLICIT NONE
+	INTEGER, PARAMETER :: SinglePrecision = KIND(0.0)
+	INTEGER, PARAMETER :: DoublePrecision = KIND(0.0d0)
+	
+	!INTEGER, PARAMETER :: fp_kind = SinglePrecision
+	INTEGER, PARAMETER :: fp_kind = DoublePrecision
+END MODULE precision_m

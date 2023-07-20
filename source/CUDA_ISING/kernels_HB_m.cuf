@@ -1,0 +1,257 @@
+MODULE kernels_m
+   USE precision_m
+   USE curand_device
+   USE cudafor
+   IMPLICIT NONE
+
+CONTAINS
+
+   ATTRIBUTES(GLOBAL) SUBROUTINE geometry(af, bf, dim)
+
+   IMPLICIT NONE
+   INTEGER, VALUE :: dim
+   INTEGER, DIMENSION(dim), DEVICE :: af, bf
+   INTEGER :: idx
+
+   idx = threadIdx%x
+
+   IF (idx .le. (dim - 1)) THEN
+      af(idx) = idx + 1
+      bf(idx + 1) = idx
+   ELSE
+      IF (idx .eq. dim) THEN
+         af(idx) = 1
+         bf(1) = idx
+      END IF
+   END IF
+
+END SUBROUTINE geometry
+
+ATTRIBUTES(GLOBAL) SUBROUTINE initialize_field(fld, dim, str)
+
+IMPLICIT NONE
+INTEGER, VALUE :: dim, str
+INTEGER, DIMENSION(dim, dim), DEVICE :: fld
+TYPE(curandStateXORWOW) :: h
+INTEGER(KIND = 8) :: seed, seq, offset
+INTEGER :: row, col, idx, i, j
+
+row = 2 * blockIdx%x
+col = 2 * threadIdx%x
+idx = blockDim%x * (blockIdx%x - 1) + threadIdx%x
+seed = idx * 64 + 1234
+seq = 0
+offset = 0
+
+IF ((row .le. dim) .and. (col .le. dim)) THEN
+   IF (str .eq. 0) THEN
+      DO i = 0, 1
+         DO j = 0, 1
+            fld(row - i, col - j) = 1
+         END DO
+      END DO
+   ELSE
+      CALL curand_init(seed, seq, offset, h)
+      DO i = 0, 1
+         DO  j = 0, 1
+            fld(row - i, col - j) = SIGN(1.0_fp_kind, 1.0_fp_kind - 2.0_fp_kind * curand_uniform_double(h))
+         END DO
+      END DO
+   END IF
+END IF
+
+END SUBROUTINE initialize_field
+
+ATTRIBUTES(HOST) SUBROUTINE initialize_up_prob(b, p_array)
+IMPLICIT NONE
+REAL(KIND = fp_kind), VALUE :: b
+REAL(KIND = fp_kind) :: p1, p2
+REAL(KIND = fp_kind), DIMENSION(5), DEVICE :: p_array
+INTEGER :: i
+
+DO i = 1, 5
+   p1 = EXP((2.0_fp_kind * REAL(i - 1, KIND = fp_kind) - 4.0_fp_kind) * b)
+   p2 = EXP(-(2.0_fp_kind * REAL(i - 1, KIND = fp_kind) - 4.0_fp_kind) * b)
+   p_array(i) = p1 / (p1 + p2)
+END DO
+
+END SUBROUTINE initialize_up_prob
+
+ATTRIBUTES(DEVICE) FUNCTION up_prob(frc, p_array)
+INTEGER, VALUE :: frc
+REAL(KIND = fp_kind) :: up_prob
+REAL(KIND = fp_kind), DIMENSION(5), DEVICE :: p_array
+
+SELECT CASE (frc)
+ CASE(0)
+   up_prob = p_array(3)
+ CASE(2)
+   up_prob = p_array(4)
+ CASE(-2)
+   up_prob = p_array(2)
+ CASE(4)
+   up_prob = p_array(5)
+ CASE(-4)
+   up_prob = p_array(1)
+END SELECT
+
+END FUNCTION up_prob
+
+ATTRIBUTES(GLOBAL) SUBROUTINE energy_partial(fld, dim, af, bf, h,  en_p_array)
+
+IMPLICIT NONE
+INTEGER, VALUE :: dim
+INTEGER :: i, j, row, col
+INTEGER, DIMENSION(dim, dim), DEVICE :: fld
+INTEGER, DIMENSION(dim), DEVICE :: af, bf
+REAL(KIND = fp_kind), DIMENSION(dim / 2), DEVICE :: en_p_array
+REAL(KIND = fp_kind), VALUE :: h
+REAL(KIND = fp_kind), SHARED :: psum_array(*)
+INTEGER :: force, r, c
+REAL(KIND = fp_kind) :: thread_sum, block_sum
+
+row = 2 * blockIdx%x
+col = 2 * threadIdx%x
+
+thread_sum = 0.0_fp_kind
+
+DO i = 0, 1
+   DO j = 0, 1
+      r = row - i
+      c = col - j
+      force = fld(r, bf(c)) + fld(r, af(c)) + fld(bf(r), c) + fld(af(r), c)
+      thread_sum = thread_sum - REAL(fld(r, c), fp_kind) * (0.5_fp_kind * REAL(force, fp_kind) + h)
+   END DO
+END DO
+CALL syncthreads()
+
+psum_array(threadIdx%x) = thread_sum
+
+CALL syncthreads()
+
+IF (threadIdx%x .eq. 1) THEN
+   block_sum = 0.0_fp_kind
+   DO i = 1, (dim / 2)
+      block_sum = block_sum + psum_array(i)
+   END DO
+   en_p_array(blockIdx%x) = block_sum
+END IF
+
+END SUBROUTINE energy_partial
+
+ATTRIBUTES(GRID_GLOBAL) SUBROUTINE MC_update(fld, dim, af, bf, h, b, i_m, n_d, p_array)
+
+USE cooperative_groups
+IMPLICIT NONE
+INTEGER, VALUE :: dim, n_d, i_m
+TYPE(grid_group) :: gg
+TYPE(curandStateXORWOW) :: h_r
+INTEGER(KIND = 8) :: seed, seq, offset
+INTEGER, DIMENSION(dim, dim), DEVICE :: fld
+INTEGER, DIMENSION(dim), DEVICE :: af, bf
+REAL(KIND = fp_kind), DIMENSION(5), DEVICE :: p_array
+REAL(KIND = fp_kind), VALUE :: h, b
+REAL(KIND = fp_kind) :: rnd, up_p
+INTEGER :: i, i_row, i_d, idx, col, row, r, c, force
+
+gg = this_grid()
+col = 2 * threadIdx%x
+idx = (blockIdx%x - 1) * blockDim%x + threadIdx%x
+
+seed = idx * (i_m ** 2) * 64 + 12345
+seq = 0
+offset = 0
+
+CALL curand_init(seed, seq, offset, h_r)
+
+DO i_d = 1, n_d
+   DO i_row = blockIdx%x, (dim / 2), gridDim%x
+      DO i = 0, 1
+         row = 2 * i_row
+         r = row - i
+         c = col - i
+         force = fld(r, bf(c)) + fld(r, af(c)) + fld(af(r), c) + fld(bf(r), c)
+         up_p = up_prob(force, p_array)
+         rnd = curand_uniform_double(h_r)
+         IF (rnd .le. up_p) THEN
+            fld(r, c) = 1
+         ELSE
+            fld(r, c) = -1
+         END IF
+      END DO
+   END DO
+
+   CALL SYNCTHREADS(gg)
+
+   DO i_row = blockIdx%x, (dim / 2), gridDim%x
+      DO i = 0, 1
+         row = 2 * i_row
+         r = row - 1 + i
+         c = col - i
+         force = fld(r, bf(c)) + fld(r, af(c)) + fld(af(r), c) + fld(bf(r), c)
+         up_p = up_prob(force, p_array)
+         rnd = curand_uniform_double(h_r)
+         IF (rnd .le. up_p) THEN
+            fld(r, c) = 1
+         ELSE
+            fld(r, c) = -1
+         END IF
+      END DO
+   END DO
+
+   CALL SYNCTHREADS(gg)
+
+END DO
+
+END SUBROUTINE MC_update
+
+ATTRIBUTES(HOST) SUBROUTINE Update_Metropolis_HB(fld, dim, af, bf, h, b, i_mis, n_dec, p_array)
+
+IMPLICIT NONE
+INTEGER, VALUE :: dim, n_dec, i_mis
+INTEGER, DIMENSION(dim, dim), DEVICE :: fld
+INTEGER, DIMENSION(dim), DEVICE :: af, bf
+REAL(KIND = fp_kind), VALUE :: h, b
+REAL(KIND = fp_kind), DIMENSION(5), DEVICE :: p_array
+INTEGER :: istat, tB, bG
+
+
+istat = CUDAOCCUPANCYMAXACTIVEBLOCKSPERMULTIPROCESSOR(tB, MC_update, dim / 2, 0)
+CALL MC_update<<<tB, dim / 2>>>(fld, dim, af, bf, h, b, i_mis, n_dec, p_array)
+
+END SUBROUTINE Update_Metropolis_HB
+
+
+ATTRIBUTES(HOST) FUNCTION Energy(fld, dim, af, bf, h)
+
+IMPLICIT NONE
+INTEGER, VALUE :: dim
+INTEGER, DIMENSION(dim, dim), DEVICE :: fld
+INTEGER, DIMENSION(dim), DEVICE :: af, bf
+REAL(KIND = fp_kind), DIMENSION(dim / 2), DEVICE  :: en_array
+REAL(KIND = fp_kind), VALUE :: h
+REAL(KIND = fp_kind) :: Energy
+TYPE(dim3) :: tBlock, Grid
+
+tBlock = dim3(dim / 2, 1, 1)
+Grid = dim3(dim / 2, 1, 1)
+
+CALL energy_partial<<<Grid, tBlock, (dim / 2) * fp_kind>>>(fld, dim, af, bf, h, en_array)
+
+Energy = SUM(en_array) / REAL(dim ** 2, fp_kind)
+
+END FUNCTION Energy
+
+ATTRIBUTES(HOST) FUNCTION Magnetization(fld, dim)
+
+IMPLICIT NONE
+INTEGER :: dim
+INTEGER, DIMENSION(dim, dim), DEVICE :: fld
+REAL(KIND = fp_kind) :: Magnetization
+
+Magnetization = REAL(SUM(fld), fp_kind) / REAL(dim ** 2, KIND = fp_kind)
+
+END FUNCTION Magnetization
+
+END MODULE kernels_m
+

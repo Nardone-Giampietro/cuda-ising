@@ -1,0 +1,59 @@
+PROGRAM ising_parallel
+   USE precision_m
+   USE kernels_m
+   USE cudafor
+   IMPLICIT NONE
+
+   INTEGER :: N_size, N_decorr, N_misures, N_term, start, i_mis, i_count, i_term, file_unit
+   INTEGER, DIMENSION(:), ALLOCATABLE, DEVICE :: aft_d, bfr_d
+   INTEGER, DIMENSION(:, :), ALLOCATABLE, DEVICE :: Field
+   REAL(KIND = fp_kind) :: B, eng, beta, mgn
+   TYPE(dim3) :: tBlock, Grid
+   CHARACTER(LEN = 3) :: name
+
+   OPEN(UNIT=1, FILE="parameters.txt", STATUS='old')
+   READ(1, *) N_size
+   READ(1, *) N_decorr
+   READ(1, *) N_misures
+   READ(1, *) N_term
+   READ(1, *) start
+   CLOSE(1)
+   B = 0.0_fp_kind
+   beta = 0.35_fp_kind
+
+   ALLOCATE(aft_d(N_size), bfr_d(N_size))
+   ALLOCATE(Field(N_size, N_size))
+
+   tBlock = dim3 (N_size / 2, 1, 1)
+   Grid = dim3 (N_size / 2, 1, 1)
+
+   CALL geometry<<<1, N_size>>>(aft_d, bfr_d, N_size)
+
+   DO i_count = 1, 2
+      WRITE(name, '(I3)') i_count
+      file_unit = i_count + 1
+      OPEN(UNIT=file_unit, ACTION='write', FILE=trim(name)//'.txt', STATUS='new')
+      write(file_unit, '(A4,I3)') '# L ', N_size
+      write(file_unit, '(A4,F5.3)') '# B ', Beta
+
+      CALL initialize_field<<<Grid, tBlock>>> (Field, N_size, start)
+
+      CALL Update_Metropolis(Field, N_size, aft_d, bfr_d, B, beta, 1, N_term)
+
+      DO i_mis = 1, N_misures
+         CALL Update_Metropolis(Field, N_size, aft_d, bfr_d, B, beta, i_mis, N_decorr)
+         !eng = Energy(Field, N_size,  aft_d, bfr_d, B)
+         mgn = Magnetization(Field, N_size)
+         WRITE(file_unit, *) ABS(mgn)
+      END DO
+
+      beta = beta + 0.002_fp_kind
+
+      CLOSE(file_unit)
+   END DO
+
+   DEALLOCATE(aft_d, bfr_d, Field)
+
+END PROGRAM ising_parallel
+
+
